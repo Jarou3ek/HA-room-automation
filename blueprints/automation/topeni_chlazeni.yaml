@@ -1,5 +1,5 @@
 blueprint:
-  name: CN - Topení podle manuálního režimu (boolean)
+  name: Room – Climate by manual mode
   description: >
     Když manual režim ON -> nastav vyšší teplotu, když OFF -> nižší.
     Triggeruje se změnou booleanu.
