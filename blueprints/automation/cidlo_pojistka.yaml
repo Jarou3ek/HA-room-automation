@@ -6,6 +6,7 @@ blueprint:
     Když motion OFF a manual OFF -> po zpoždění zhasne auto světla (pokud stále bez pohybu).
     Pojistka: pokud je bez pohybu déle než safety_time a skupina svítí -> zhasne skupinu a vypne manual.
   domain: automation
+
   input:
     motion_sensor:
       name: Pohybové čidlo (occupancy)
