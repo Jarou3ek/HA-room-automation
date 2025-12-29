@@ -1,5 +1,5 @@
 blueprint:
-  name: Room - Motion auto lights + manual override + safety off
+  name: Room – Motion lights + auto off + safety
   description: >
     Když motion ON a manual OFF a skupina je OFF -> rozsvítí vybraná světla (auto list) na daný jas.
     Když motion OFF a manual OFF -> po zpoždění zhasne auto světla (pokud stále bez pohybu).
