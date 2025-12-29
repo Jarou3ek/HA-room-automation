@@ -1,0 +1,65 @@
+blueprint:
+  name: CN - Topení podle manuálního režimu (boolean)
+  description: >
+    Když manual režim ON -> nastav vyšší teplotu, když OFF -> nižší.
+    Triggeruje se změnou booleanu.
+  domain: automation
+
+  input:
+    manual_mode_boolean:
+      name: Input boolean - manuální režim
+      selector:
+        entity:
+          domain: input_boolean
+    climate_entity:
+      name: Termostat / climate entita
+      selector:
+        entity:
+          domain: climate
+    temp_when_on:
+      name: Teplota při manuál ON
+      default: 21
+      selector:
+        number:
+          min: 5
+          max: 30
+          unit_of_measurement: "°C"
+          mode: slider
+    temp_when_off:
+      name: Teplota při manuál OFF
+      default: 18
+      selector:
+        number:
+          min: 5
+          max: 30
+          unit_of_measurement: "°C"
+          mode: slider
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input manual_mode_boolean
+
+action:
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: !input manual_mode_boolean
+            state: "on"
+        sequence:
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate_entity
+            data:
+              temperature: !input temp_when_on
+      - conditions:
+          - condition: state
+            entity_id: !input manual_mode_boolean
+            state: "off"
+        sequence:
+          - service: climate.set_temperature
+            target:
+              entity_id: !input climate_entity
+            data:
+              temperature: !input temp_when_off
