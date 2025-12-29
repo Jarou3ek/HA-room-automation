@@ -1,5 +1,5 @@
 blueprint:
-  name: Room - Hue Dimmer v2 (MQTT) + manual režim
+  name: Room – Switch → Lights (manual mode)
   description: >
     Ovládání skupiny světel přes Hue Dimmer v2 (Zigbee2MQTT MQTT topic).
     on_press: když manual OFF -> rozsvítí a nastaví manual ON, když manual ON -> zhasne a nastaví manual OFF.
