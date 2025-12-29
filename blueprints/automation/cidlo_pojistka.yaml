@@ -11,36 +11,41 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
+
     manual_boolean:
       name: Input boolean - manuální režim
       selector:
         entity:
           domain: input_boolean
+
     light_group:
       name: Skupina světel (hlavní)
       selector:
         entity:
           domain: light
+
     auto_lights:
       name: Světla pro automatiku (např. 5+1)
       selector:
         target:
           entity:
             domain: light
-    auto_brightness_pct:
-      name: Jas pro auto světla při pohybu
-      default: 80
+
+    auto_brightness:
+      name: Jas pro auto světla při pohybu (0-255)
+      default: 204
       selector:
         number:
           min: 1
-          max: 100
+          max: 255
           mode: slider
-          unit_of_measurement: "%"
+
     off_delay:
       name: Zpoždění vypnutí po motion OFF
       default: "00:00:30"
       selector:
         duration:
+
     safety_time:
       name: Pojistka vypnutí po době bez pohybu
       default: "00:30:00"
@@ -63,7 +68,6 @@ trigger:
 
 action:
   - choose:
-      # Motion ON -> auto ON (jen když manual OFF a skupina OFF)
       - conditions:
           - condition: template
             value_template: "{{ trigger.to_state.state == 'on' }}"
@@ -77,9 +81,8 @@ action:
           - service: light.turn_on
             target: !input auto_lights
             data:
-              brightness_pct: !input auto_brightness_pct
+              brightness: !input auto_brightness
 
-      # Motion OFF -> auto OFF po delay (jen když manual OFF)
       - conditions:
           - condition: template
             value_template: "{{ trigger.to_state.state == 'off' and trigger.for is none }}"
@@ -94,7 +97,6 @@ action:
           - service: light.turn_off
             target: !input auto_lights
 
-      # Pojistka OFF po safety_time (nezávisle na manual – jako „zapomněl jsem zhasnout“)
       - conditions:
           - condition: template
             value_template: "{{ trigger.for is not none }}"
