@@ -1,7 +1,7 @@
 blueprint:
   name: "Room – Motion lights + auto off + safety"
   description: >
-    v1.0.2 - Upraven popis
+    v1.0.3 - oprava blikani
 
     Když motion ON a manual OFF a skupina je OFF -> rozsvítí vybraná světla (auto list) na daný jas.
     Když motion OFF a manual OFF -> po zpoždění zhasne auto světla (pokud stále bez pohybu).
