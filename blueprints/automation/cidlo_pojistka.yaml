@@ -60,13 +60,18 @@ blueprint:
 mode: restart
 
 trigger:
-  - platform: state
+  - id: motion_on
+    platform: state
     entity_id: !input motion_sensor
     to: "on"
-  - platform: state
+
+  - id: motion_off
+    platform: state
     entity_id: !input motion_sensor
     to: "off"
-  - platform: state
+
+  - id: safety_off
+    platform: state
     entity_id: !input motion_sensor
     to: "off"
     for: !input safety_time
@@ -75,7 +80,7 @@ action:
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ trigger.to_state.state == 'on' }}"
+            value_template: "{{ trigger.id == 'motion_on' }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "off"
@@ -90,7 +95,7 @@ action:
 
       - conditions:
           - condition: template
-            value_template: "{{ trigger.to_state.state == 'off' and trigger.for is none }}"
+            value_template: "{{ trigger.id == 'motion_off' }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "off"
@@ -104,7 +109,7 @@ action:
 
       - conditions:
           - condition: template
-            value_template: "{{ trigger.for is not none }}"
+            value_template: "{{ trigger.id == 'safety_off' }}"
           - condition: state
             entity_id: !input light_group
             state: "on"
