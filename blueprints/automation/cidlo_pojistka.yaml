@@ -1,7 +1,7 @@
 blueprint:
   name: "Room – Motion lights + auto off + safety"
   description: >
-    v1.0.3 - oprava blikani
+    v1.0.4 - oprava blikani
 
     Když motion ON a manual OFF a skupina je OFF -> rozsvítí vybraná světla (auto list) na daný jas.
     Když motion OFF a manual OFF -> po zpoždění zhasne auto světla (pokud stále bez pohybu).
@@ -69,6 +69,7 @@ trigger:
     platform: state
     entity_id: !input motion_sensor
     to: "off"
+    for: !input off_delay
 
   - id: safety_off
     platform: state
@@ -99,11 +100,10 @@ action:
           - condition: state
             entity_id: !input manual_boolean
             state: "off"
-        sequence:
-          - delay: !input off_delay
           - condition: state
             entity_id: !input motion_sensor
             state: "off"
+        sequence:
           - service: light.turn_off
             target: !input auto_lights
 
