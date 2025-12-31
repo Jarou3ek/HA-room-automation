@@ -74,7 +74,7 @@ blueprint:
         boolean:
 
     safety_time:
-      name: Pojistka: doba bez pohybu (jen když manual=ON)
+      name: Pojistka - doba bez pohybu (jen když manual=ON)
       default: "00:30:00"
       selector:
         duration:
