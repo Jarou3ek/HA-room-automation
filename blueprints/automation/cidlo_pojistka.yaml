@@ -1,18 +1,13 @@
 blueprint:
-  name: "Room – Motion (multi) + optional manual gate + optional safety + lights/switches"
+  name: "Room – Motion (multi) + Auto OFF + Optional Manual + Optional Safety (lights+switches)"
   description: >
     v2.0.0
 
-    - AUTO ON: když je jakékoliv motion ON -> zapne auto_targets
-      (volitelně jen když manual_boolean = off)
-      (volitelně nastaví jas pouze pro light entity)
-
-    - AUTO OFF: když jsou všechna motion OFF po off_delay -> vypne auto_targets
-      (volitelně jen když manual_boolean = off)
-
-    - SAFETY (volitelně): když jsou všechna motion OFF po safety_time a manual_boolean = on
-      -> vypne safety_targets (může být "vše v místnosti") + nastaví manual_boolean = off
-
+    - Motion ON (any sensor) -> turn ON auto targets.
+    - Motion OFF (all sensors off for off_delay) -> turn OFF auto targets.
+    - Optional: manual condition (auto runs only when manual_boolean is OFF).
+    - Optional: safety (if manual is ON and all sensors off for safety_time -> turn OFF safety targets + manual OFF).
+    - Supports light entities (with optional brightness) and switch entities (on/off only).
   domain: automation
 
   input:
@@ -23,36 +18,34 @@ blueprint:
           domain: binary_sensor
           multiple: true
 
+    use_manual_condition:
+      name: Použít podmínku manuálního režimu
+      default: true
+      selector:
+        boolean:
+
     manual_boolean:
       name: Input boolean - manuální režim
       selector:
         entity:
           domain: input_boolean
 
-    use_manual_gate:
-      name: Použít podmínku manuálního režimu pro AUTO (ON/OFF)
-      description: Když zapnuto, AUTO ON/OFF běží jen pokud manual_boolean je OFF.
-      default: true
-      selector:
-        boolean:
-
-    auto_targets:
-      name: Cíle automatického zapnutí/vypnutí (light i switch)
+    light_targets:
+      name: Auto - světla (light.*)
+      default: {}
       selector:
         target:
           entity:
-            domain:
-              - light
-              - switch
+            domain: light
 
     use_brightness:
-      name: Použít jas při AUTO ON (pouze pro světla)
+      name: Použít jas pro auto světla
       default: true
       selector:
         boolean:
 
     auto_brightness:
-      name: Jas pro AUTO ON (1-255)
+      name: Jas pro auto světla při pohybu (0-255)
       default: 204
       selector:
         number:
@@ -60,122 +53,190 @@ blueprint:
           max: 255
           mode: slider
 
+    switch_targets:
+      name: Auto - spínače (switch.*, např. Shelly)
+      default: {}
+      selector:
+        target:
+          entity:
+            domain: switch
+
     off_delay:
-      name: Zpoždění vypnutí po všech motion OFF
+      name: Zpoždění vypnutí po všech čidlech OFF
       default: "00:00:30"
       selector:
         duration:
 
-    enable_safety:
-      name: Povolit pojistku (SAFETY)
+    use_safety:
+      name: Zapnout pojistku (safety)
       default: true
       selector:
         boolean:
 
     safety_time:
-      name: Pojistka vypnutí po době bez pohybu (všechna čidla OFF)
+      name: Pojistka: doba bez pohybu (jen když manual=ON)
       default: "00:30:00"
       selector:
         duration:
 
-    safety_targets:
-      name: Cíle pojistky (např. všechna světla v místnosti)
-      description: Tohle se vypne při SAFETY (a manual se přepne na OFF).
+    safety_light_targets:
+      name: Pojistka - světla k vypnutí (např. všechno v místnosti)
+      default: {}
       selector:
         target:
           entity:
-            domain:
-              - light
-              - switch
+            domain: light
+
+    safety_switch_targets:
+      name: Pojistka - spínače k vypnutí
+      default: {}
+      selector:
+        target:
+          entity:
+            domain: switch
 
 mode: restart
 
 trigger:
-  # jakékoliv čidlo ON
+  # ANY sensor ON
   - id: motion_any_on
     platform: state
     entity_id: !input motion_sensors
     to: "on"
 
-  # všechna čidla OFF po off_delay
-  - id: motion_all_off_delay
+  # ALL sensors OFF for off_delay
+  - id: motion_all_off
     platform: template
     value_template: >
-      {% set sensors = expand(!input motion_sensors) %}
-      {{ sensors | count > 0 and (sensors | selectattr('state','eq','on') | list | length == 0) }}
+      {{ expand(!input motion_sensors)
+         | selectattr('state','eq','on')
+         | list
+         | count == 0 }}
     for: !input off_delay
 
-  # všechna čidla OFF po safety_time
+  # SAFETY: ALL sensors OFF for safety_time (only evaluated; we still gate by use_safety + manual in actions)
   - id: safety_all_off
     platform: template
     value_template: >
-      {% set sensors = expand(!input motion_sensors) %}
-      {{ sensors | count > 0 and (sensors | selectattr('state','eq','on') | list | length == 0) }}
+      {{ expand(!input motion_sensors)
+         | selectattr('state','eq','on')
+         | list
+         | count == 0 }}
     for: !input safety_time
 
 action:
-  - variables:
-      manual_ent: !input manual_boolean
-      manual_gate: !input use_manual_gate
-      do_bri: !input use_brightness
-      bri: !input auto_brightness
-      safety_enabled: !input enable_safety
-
   - choose:
-
-      # ===== AUTO ON =====
+      # ========== AUTO ON ==========
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'motion_any_on' }}"
           - condition: template
             value_template: >
-              {{ (not manual_gate) or (is_state(manual_ent, 'off')) }}
+              {% set use_manual = !input use_manual_condition %}
+              {% if use_manual %}
+                {{ is_state(!input manual_boolean, 'off') }}
+              {% else %}
+                true
+              {% endif %}
         sequence:
-          # nejdřív světla s jasem (pokud povoleno)
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ do_bri }}"
+                    value_template: >
+                      {{ (!input light_targets).get('entity_id') is defined and
+                         (( !input light_targets ).get('entity_id') | count > 0) }}
                 sequence:
-                  - service: light.turn_on
-                    target:
-                      entity_id: >
-                        {% set t = expand(!input auto_targets.entity_id) %}
-                        {{ t | selectattr('domain','eq','light') | map(attribute='entity_id') | list }}
-                    data:
-                      brightness: "{{ bri }}"
-                  - service: homeassistant.turn_on
-                    target:
-                      entity_id: >
-                        {% set t = expand(!input auto_targets.entity_id) %}
-                        {{ t | rejectattr('domain','eq','light') | map(attribute='entity_id') | list }}
-            default:
-              - service: homeassistant.turn_on
-                target: !input auto_targets
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ !input use_brightness }}"
+                        sequence:
+                          - service: light.turn_on
+                            target: !input light_targets
+                            data:
+                              brightness: !input auto_brightness
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ not (!input use_brightness) }}"
+                        sequence:
+                          - service: light.turn_on
+                            target: !input light_targets
+            default: []
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ (!input switch_targets).get('entity_id') is defined and
+                         (( !input switch_targets ).get('entity_id') | count > 0) }}
+                sequence:
+                  - service: switch.turn_on
+                    target: !input switch_targets
+            default: []
 
-      # ===== AUTO OFF =====
+      # ========== AUTO OFF ==========
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_all_off_delay' }}"
+            value_template: "{{ trigger.id == 'motion_all_off' }}"
           - condition: template
             value_template: >
-              {{ (not manual_gate) or (is_state(manual_ent, 'off')) }}
+              {% set use_manual = !input use_manual_condition %}
+              {% if use_manual %}
+                {{ is_state(!input manual_boolean, 'off') }}
+              {% else %}
+                true
+              {% endif %}
         sequence:
-          - service: homeassistant.turn_off
-            target: !input auto_targets
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ (!input light_targets).get('entity_id') is defined and
+                         (( !input light_targets ).get('entity_id') | count > 0) }}
+                sequence:
+                  - service: light.turn_off
+                    target: !input light_targets
+            default: []
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ (!input switch_targets).get('entity_id') is defined and
+                         (( !input switch_targets ).get('entity_id') | count > 0) }}
+                sequence:
+                  - service: switch.turn_off
+                    target: !input switch_targets
+            default: []
 
-      # ===== SAFETY =====
+      # ========== SAFETY (manual ON -> after safety_time with no motion) ==========
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'safety_all_off' }}"
           - condition: template
-            value_template: "{{ safety_enabled }}"
+            value_template: "{{ !input use_safety }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "on"
         sequence:
-          - service: homeassistant.turn_off
-            target: !input safety_targets
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ (!input safety_light_targets).get('entity_id') is defined and
+                         (( !input safety_light_targets ).get('entity_id') | count > 0) }}
+                sequence:
+                  - service: light.turn_off
+                    target: !input safety_light_targets
+            default: []
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {{ (!input safety_switch_targets).get('entity_id') is defined and
+                         (( !input safety_switch_targets ).get('entity_id') | count > 0) }}
+                sequence:
+                  - service: switch.turn_off
+                    target: !input safety_switch_targets
+            default: []
           - service: input_boolean.turn_off
             target:
               entity_id: !input manual_boolean
