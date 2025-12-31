@@ -1,30 +1,43 @@
 blueprint:
-  name: "Room – Motion lights/switch + auto off + optional safety (multi-sensor)"
+  name: "Room – Motion (multi) + optional manual gate + optional safety + lights/switches"
   description: >
-    v1.1.1
+    v2.0.0
 
-    - AUTO ON: když je jakékoli motion čidlo ON -> zapne ovládaná zařízení
-      (volitelně pouze pokud manual = off)
-    - AUTO OFF: když jsou všechna motion čidla OFF po off_delay -> vypne ovládaná zařízení
-      (volitelně pouze pokud manual = off)
-    - SAFETY (pojistka): pokud manual = on a všechna čidla jsou OFF po safety_time -> vypne ovládaná zařízení a nastaví manual = off
-      (volitelně zap/vyp)
-    - Podpora více čidel (ANY ON pro rozsvícení, ALL OFF pro zhasnutí)
-    - Ovládání light i switch (např. Shelly jako switch.*)
-    - Volitelný jas (jen pro light; nepoužívej, pokud v cílech máš switch)
+    - AUTO ON: když je jakékoliv motion ON -> zapne auto_targets
+      (volitelně jen když manual_boolean = off)
+      (volitelně nastaví jas pouze pro light entity)
+
+    - AUTO OFF: když jsou všechna motion OFF po off_delay -> vypne auto_targets
+      (volitelně jen když manual_boolean = off)
+
+    - SAFETY (volitelně): když jsou všechna motion OFF po safety_time a manual_boolean = on
+      -> vypne safety_targets (může být "vše v místnosti") + nastaví manual_boolean = off
 
   domain: automation
 
   input:
     motion_sensors:
-      name: Pohybová čidla (occupancy) – jedno nebo více
+      name: Pohybová čidla (1 nebo více)
       selector:
         entity:
           domain: binary_sensor
           multiple: true
 
-    controlled_targets:
-      name: Ovládaná zařízení (světla nebo spínače)
+    manual_boolean:
+      name: Input boolean - manuální režim
+      selector:
+        entity:
+          domain: input_boolean
+
+    use_manual_gate:
+      name: Použít podmínku manuálního režimu pro AUTO (ON/OFF)
+      description: Když zapnuto, AUTO ON/OFF běží jen pokud manual_boolean je OFF.
+      default: true
+      selector:
+        boolean:
+
+    auto_targets:
+      name: Cíle automatického zapnutí/vypnutí (light i switch)
       selector:
         target:
           entity:
@@ -32,28 +45,14 @@ blueprint:
               - light
               - switch
 
-    # --- Volitelný MANUAL režim (můžeš ignorovat)
-    use_manual_condition:
-      name: Použít podmínku manuálního režimu (manual=off)?
+    use_brightness:
+      name: Použít jas při AUTO ON (pouze pro světla)
       default: true
       selector:
         boolean:
 
-    manual_boolean:
-      name: Input boolean – manuální režim (použije se jen když je volba výše zapnutá / nebo pro safety)
-      selector:
-        entity:
-          domain: input_boolean
-
-    # --- Volitelný JAS (jen pro light)
-    use_brightness:
-      name: Použít jas při AUTO ON (POUZE pokud ovládáš jen light)?
-      default: false
-      selector:
-        boolean:
-
     auto_brightness:
-      name: Jas pro AUTO ON (1–255)
+      name: Jas pro AUTO ON (1-255)
       default: 204
       selector:
         number:
@@ -62,113 +61,121 @@ blueprint:
           mode: slider
 
     off_delay:
-      name: Zpoždění vypnutí po ALL motion OFF
+      name: Zpoždění vypnutí po všech motion OFF
       default: "00:00:30"
       selector:
         duration:
 
-    # --- Volitelná pojistka
-    safety_enabled:
-      name: Zapnout pojistku (safety)?
+    enable_safety:
+      name: Povolit pojistku (SAFETY)
       default: true
       selector:
         boolean:
 
     safety_time:
-      name: Pojistka – vypnutí po době bez pohybu (jen když manual=on)
+      name: Pojistka vypnutí po době bez pohybu (všechna čidla OFF)
       default: "00:30:00"
       selector:
         duration:
 
+    safety_targets:
+      name: Cíle pojistky (např. všechna světla v místnosti)
+      description: Tohle se vypne při SAFETY (a manual se přepne na OFF).
+      selector:
+        target:
+          entity:
+            domain:
+              - light
+              - switch
+
 mode: restart
 
-variables:
-  motion_entities: !input motion_sensors
-  manual_entity: !input manual_boolean
-  use_manual: !input use_manual_condition
-  use_bri: !input use_brightness
-  safety_en: !input safety_enabled
-
-  # ANY ON = rozsvítit
-  any_motion_on: >
-    {{ expand(motion_entities) | selectattr('state','eq','on') | list | count > 0 }}
-
-  # ALL OFF = zhasínat
-  all_motion_off: >
-    {{ expand(motion_entities) | selectattr('state','eq','off') | list | count == (expand(motion_entities) | list | count) }}
-
-  manual_is_off: >
-    {{ is_state(manual_entity, 'off') }}
-
-  manual_is_on: >
-    {{ is_state(manual_entity, 'on') }}
-
 trigger:
-  # Rozsvítit, když je jakékoli čidlo ON
-  - id: motion_on
-    platform: template
-    value_template: "{{ any_motion_on }}"
+  # jakékoliv čidlo ON
+  - id: motion_any_on
+    platform: state
+    entity_id: !input motion_sensors
+    to: "on"
 
-  # Zhasnout, když jsou všechna čidla OFF po off_delay
-  - id: motion_off
+  # všechna čidla OFF po off_delay
+  - id: motion_all_off_delay
     platform: template
-    value_template: "{{ all_motion_off }}"
+    value_template: >
+      {% set sensors = expand(!input motion_sensors) %}
+      {{ sensors | count > 0 and (sensors | selectattr('state','eq','on') | list | length == 0) }}
     for: !input off_delay
 
-  # Pojistka, když jsou všechna čidla OFF po safety_time
-  - id: safety_off
+  # všechna čidla OFF po safety_time
+  - id: safety_all_off
     platform: template
-    value_template: "{{ all_motion_off }}"
+    value_template: >
+      {% set sensors = expand(!input motion_sensors) %}
+      {{ sensors | count > 0 and (sensors | selectattr('state','eq','on') | list | length == 0) }}
     for: !input safety_time
 
 action:
+  - variables:
+      manual_ent: !input manual_boolean
+      manual_gate: !input use_manual_gate
+      do_bri: !input use_brightness
+      bri: !input auto_brightness
+      safety_enabled: !input enable_safety
+
   - choose:
 
-      # --- AUTO ON
+      # ===== AUTO ON =====
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_on' }}"
-          # volitelná podmínka manual=off
+            value_template: "{{ trigger.id == 'motion_any_on' }}"
           - condition: template
-            value_template: "{{ (not use_manual) or manual_is_off }}"
+            value_template: >
+              {{ (not manual_gate) or (is_state(manual_ent, 'off')) }}
         sequence:
+          # nejdřív světla s jasem (pokud povoleno)
           - choose:
-              # pokud chceš jas (jen pro light)
               - conditions:
                   - condition: template
-                    value_template: "{{ use_bri }}"
+                    value_template: "{{ do_bri }}"
                 sequence:
                   - service: light.turn_on
-                    target: !input controlled_targets
+                    target:
+                      entity_id: >
+                        {% set t = expand(!input auto_targets.entity_id) %}
+                        {{ t | selectattr('domain','eq','light') | map(attribute='entity_id') | list }}
                     data:
-                      brightness: !input auto_brightness
+                      brightness: "{{ bri }}"
+                  - service: homeassistant.turn_on
+                    target:
+                      entity_id: >
+                        {% set t = expand(!input auto_targets.entity_id) %}
+                        {{ t | rejectattr('domain','eq','light') | map(attribute='entity_id') | list }}
             default:
               - service: homeassistant.turn_on
-                target: !input controlled_targets
+                target: !input auto_targets
 
-      # --- AUTO OFF
+      # ===== AUTO OFF =====
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_off' }}"
-          # volitelná podmínka manual=off
+            value_template: "{{ trigger.id == 'motion_all_off_delay' }}"
           - condition: template
-            value_template: "{{ (not use_manual) or manual_is_off }}"
-          # pojistka proti falešnému odpalu: opravdu pořád ALL OFF
-          - condition: template
-            value_template: "{{ all_motion_off }}"
+            value_template: >
+              {{ (not manual_gate) or (is_state(manual_ent, 'off')) }}
         sequence:
           - service: homeassistant.turn_off
-            target: !input controlled_targets
+            target: !input auto_targets
 
-      # --- SAFETY (manual=on + dlouho bez pohybu)
+      # ===== SAFETY =====
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'safety_off' }}"
+            value_template: "{{ trigger.id == 'safety_all_off' }}"
           - condition: template
-            value_template: "{{ safety_en and manual_is_on and all_motion_off }}"
+            value_template: "{{ safety_enabled }}"
+          - condition: state
+            entity_id: !input manual_boolean
+            state: "on"
         sequence:
           - service: homeassistant.turn_off
-            target: !input controlled_targets
+            target: !input safety_targets
           - service: input_boolean.turn_off
             target:
               entity_id: !input manual_boolean
