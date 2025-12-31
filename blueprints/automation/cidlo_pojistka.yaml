@@ -1,10 +1,10 @@
 blueprint:
   name: "Room – Motion (multi) + Auto OFF + Optional Manual + Optional Safety (lights+switches)"
   description: >
-    v2.0.3
+    v2.1.0
 
     - Motion ON (any sensor) -> turn ON auto targets.
-    - Motion OFF (all sensors off for off_delay) -> turn OFF auto targets.
+    - Motion goes to no-motion (all sensors off) -> after off_delay -> turn OFF auto targets.
     - Optional: manual condition (auto runs only when manual_boolean is OFF).
     - Optional: safety (if manual is ON and all sensors off for safety_time -> turn OFF safety targets + manual OFF).
     - Supports light entities (with optional brightness) and switch entities (on/off only).
@@ -19,7 +19,7 @@ blueprint:
           multiple: true
 
     use_manual_condition:
-      name: Použít podmínku manuálního režimu
+      name: Použít podmínku manuálního režimu (auto běží jen když manual=OFF)
       default: true
       selector:
         boolean:
@@ -62,7 +62,7 @@ blueprint:
             domain: switch
 
     off_delay:
-      name: Zpoždění vypnutí po všech čidlech OFF
+      name: Zpoždění vypnutí po době bez pohybu
       default: "00:00:30"
       selector:
         duration:
@@ -88,7 +88,7 @@ blueprint:
             domain: light
 
     safety_switch_targets:
-      name: Pojistka - spínače k vypnutí
+      name: Pojistka - spínače k vypnutí (např. všechno v místnosti)
       default: {}
       selector:
         target:
@@ -101,67 +101,39 @@ variables:
   motion_sensors: !input motion_sensors
   use_manual_condition: !input use_manual_condition
   manual_boolean: !input manual_boolean
-
   light_targets: !input light_targets
   switch_targets: !input switch_targets
-
   use_brightness: !input use_brightness
   auto_brightness: !input auto_brightness
-
+  off_delay: !input off_delay
   use_safety: !input use_safety
+  safety_time: !input safety_time
   safety_light_targets: !input safety_light_targets
   safety_switch_targets: !input safety_switch_targets
 
-  # normalizace targetů na seznam entit (kvůli count a string/list rozdílům)
-  auto_light_entities: >-
-    {% set e = light_targets.get('entity_id', []) %}
-    {{ [e] if e is string else (e | default([])) }}
-
-  auto_switch_entities: >-
-    {% set e = switch_targets.get('entity_id', []) %}
-    {{ [e] if e is string else (e | default([])) }}
-
-  safety_light_entities: >-
-    {% set e = safety_light_targets.get('entity_id', []) %}
-    {{ [e] if e is string else (e | default([])) }}
-
-  safety_switch_entities: >-
-    {% set e = safety_switch_targets.get('entity_id', []) %}
-    {{ [e] if e is string else (e | default([])) }}
+  any_motion_on: >-
+    {{ expand(motion_sensors) | selectattr('state','eq','on') | list | count > 0 }}
+  all_motion_off: >-
+    {{ expand(motion_sensors) | selectattr('state','eq','on') | list | count == 0 }}
 
 trigger:
-  # ANY sensor ON
-  - id: motion_any_on
+  - id: motion_on
     platform: state
     entity_id: !input motion_sensors
     to: "on"
 
-  # ALL sensors OFF for off_delay
-  - id: motion_all_off
-    platform: template
-    value_template: >
-      {{ expand(motion_sensors)
-         | selectattr('state','eq','on')
-         | list
-         | count == 0 }}
-    for: !input off_delay
-
-  # SAFETY: ALL sensors OFF for safety_time
-  - id: safety_all_off
-    platform: template
-    value_template: >
-      {{ expand(motion_sensors)
-         | selectattr('state','eq','on')
-         | list
-         | count == 0 }}
-    for: !input safety_time
+  # re-řešíme zhasnutí / pojistku kdykoliv nějaké čidlo přejde na off
+  - id: motion_changed_off
+    platform: state
+    entity_id: !input motion_sensors
+    to: "off"
 
 action:
   - choose:
       # ========== AUTO ON ==========
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_any_on' }}"
+            value_template: "{{ trigger.id == 'motion_on' }}"
           - condition: template
             value_template: >
               {{ (not use_manual_condition) or is_state(manual_boolean, 'off') }}
@@ -170,7 +142,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ auto_light_entities | count > 0 }}"
+                    value_template: "{{ light_targets.entity_id is defined and (light_targets.entity_id | count > 0) }}"
                 sequence:
                   - choose:
                       - conditions:
@@ -188,12 +160,11 @@ action:
                           - service: light.turn_on
                             target: !input light_targets
             default: []
-
-          # switches ON (Shelly apod.)
+          # switches ON
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ auto_switch_entities | count > 0 }}"
+                    value_template: "{{ switch_targets.entity_id is defined and (switch_targets.entity_id | count > 0) }}"
                 sequence:
                   - service: switch.turn_on
                     target: !input switch_targets
@@ -202,15 +173,19 @@ action:
       # ========== AUTO OFF ==========
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_all_off' }}"
+            value_template: "{{ trigger.id == 'motion_changed_off' }}"
           - condition: template
             value_template: >
               {{ (not use_manual_condition) or is_state(manual_boolean, 'off') }}
         sequence:
+          # čekáme off_delay a pak ověříme, že pořád není pohyb
+          - delay: !input off_delay
+          - condition: template
+            value_template: "{{ all_motion_off }}"
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ auto_light_entities | count > 0 }}"
+                    value_template: "{{ light_targets.entity_id is defined and (light_targets.entity_id | count > 0) }}"
                 sequence:
                   - service: light.turn_off
                     target: !input light_targets
@@ -218,7 +193,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ auto_switch_entities | count > 0 }}"
+                    value_template: "{{ switch_targets.entity_id is defined and (switch_targets.entity_id | count > 0) }}"
                 sequence:
                   - service: switch.turn_off
                     target: !input switch_targets
@@ -227,17 +202,23 @@ action:
       # ========== SAFETY ==========
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'safety_all_off' }}"
+            value_template: "{{ trigger.id == 'motion_changed_off' }}"
           - condition: template
             value_template: "{{ use_safety }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "on"
         sequence:
+          - delay: !input safety_time
+          - condition: state
+            entity_id: !input manual_boolean
+            state: "on"
+          - condition: template
+            value_template: "{{ all_motion_off }}"
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ safety_light_entities | count > 0 }}"
+                    value_template: "{{ safety_light_targets.entity_id is defined and (safety_light_targets.entity_id | count > 0) }}"
                 sequence:
                   - service: light.turn_off
                     target: !input safety_light_targets
@@ -245,7 +226,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ safety_switch_entities | count > 0 }}"
+                    value_template: "{{ safety_switch_targets.entity_id is defined and (safety_switch_targets.entity_id | count > 0) }}"
                 sequence:
                   - service: switch.turn_off
                     target: !input safety_switch_targets
