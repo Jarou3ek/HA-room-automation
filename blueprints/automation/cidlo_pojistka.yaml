@@ -1,7 +1,7 @@
 blueprint:
   name: "Room – Motion (multi) + Auto OFF + Optional Manual + Optional Safety (lights+switches)"
   description: >
-    v2.0.2
+    v2.0.3
 
     - Motion ON (any sensor) -> turn ON auto targets.
     - Motion OFF (all sensors off for off_delay) -> turn OFF auto targets.
@@ -97,6 +97,38 @@ blueprint:
 
 mode: restart
 
+variables:
+  motion_sensors: !input motion_sensors
+  use_manual_condition: !input use_manual_condition
+  manual_boolean: !input manual_boolean
+
+  light_targets: !input light_targets
+  switch_targets: !input switch_targets
+
+  use_brightness: !input use_brightness
+  auto_brightness: !input auto_brightness
+
+  use_safety: !input use_safety
+  safety_light_targets: !input safety_light_targets
+  safety_switch_targets: !input safety_switch_targets
+
+  # normalizace targetů na seznam entit (kvůli count a string/list rozdílům)
+  auto_light_entities: >-
+    {% set e = light_targets.get('entity_id', []) %}
+    {{ [e] if e is string else (e | default([])) }}
+
+  auto_switch_entities: >-
+    {% set e = switch_targets.get('entity_id', []) %}
+    {{ [e] if e is string else (e | default([])) }}
+
+  safety_light_entities: >-
+    {% set e = safety_light_targets.get('entity_id', []) %}
+    {{ [e] if e is string else (e | default([])) }}
+
+  safety_switch_entities: >-
+    {% set e = safety_switch_targets.get('entity_id', []) %}
+    {{ [e] if e is string else (e | default([])) }}
+
 trigger:
   # ANY sensor ON
   - id: motion_any_on
@@ -108,17 +140,17 @@ trigger:
   - id: motion_all_off
     platform: template
     value_template: >
-      {{ expand(!input motion_sensors)
+      {{ expand(motion_sensors)
          | selectattr('state','eq','on')
          | list
          | count == 0 }}
     for: !input off_delay
 
-  # SAFETY: ALL sensors OFF for safety_time (only evaluated; we still gate by use_safety + manual in actions)
+  # SAFETY: ALL sensors OFF for safety_time
   - id: safety_all_off
     platform: template
     value_template: >
-      {{ expand(!input motion_sensors)
+      {{ expand(motion_sensors)
          | selectattr('state','eq','on')
          | list
          | count == 0 }}
@@ -132,24 +164,18 @@ action:
             value_template: "{{ trigger.id == 'motion_any_on' }}"
           - condition: template
             value_template: >
-              {% set use_manual = !input use_manual_condition %}
-              {% if use_manual %}
-                {{ is_state(!input manual_boolean, 'off') }}
-              {% else %}
-                true
-              {% endif %}
+              {{ (not use_manual_condition) or is_state(manual_boolean, 'off') }}
         sequence:
+          # lights ON
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input light_targets).get('entity_id') is defined and
-                         (( !input light_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ auto_light_entities | count > 0 }}"
                 sequence:
                   - choose:
                       - conditions:
                           - condition: template
-                            value_template: "{{ !input use_brightness }}"
+                            value_template: "{{ use_brightness }}"
                         sequence:
                           - service: light.turn_on
                             target: !input light_targets
@@ -157,17 +183,17 @@ action:
                               brightness: !input auto_brightness
                       - conditions:
                           - condition: template
-                            value_template: "{{ not (!input use_brightness) }}"
+                            value_template: "{{ not use_brightness }}"
                         sequence:
                           - service: light.turn_on
                             target: !input light_targets
             default: []
+
+          # switches ON (Shelly apod.)
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input switch_targets).get('entity_id') is defined and
-                         (( !input switch_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ auto_switch_entities | count > 0 }}"
                 sequence:
                   - service: switch.turn_on
                     target: !input switch_targets
@@ -179,19 +205,12 @@ action:
             value_template: "{{ trigger.id == 'motion_all_off' }}"
           - condition: template
             value_template: >
-              {% set use_manual = !input use_manual_condition %}
-              {% if use_manual %}
-                {{ is_state(!input manual_boolean, 'off') }}
-              {% else %}
-                true
-              {% endif %}
+              {{ (not use_manual_condition) or is_state(manual_boolean, 'off') }}
         sequence:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input light_targets).get('entity_id') is defined and
-                         (( !input light_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ auto_light_entities | count > 0 }}"
                 sequence:
                   - service: light.turn_off
                     target: !input light_targets
@@ -199,20 +218,18 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input switch_targets).get('entity_id') is defined and
-                         (( !input switch_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ auto_switch_entities | count > 0 }}"
                 sequence:
                   - service: switch.turn_off
                     target: !input switch_targets
             default: []
 
-      # ========== SAFETY (manual ON -> after safety_time with no motion) ==========
+      # ========== SAFETY ==========
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'safety_all_off' }}"
           - condition: template
-            value_template: "{{ !input use_safety }}"
+            value_template: "{{ use_safety }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "on"
@@ -220,9 +237,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input safety_light_targets).get('entity_id') is defined and
-                         (( !input safety_light_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ safety_light_entities | count > 0 }}"
                 sequence:
                   - service: light.turn_off
                     target: !input safety_light_targets
@@ -230,9 +245,7 @@ action:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: >
-                      {{ (!input safety_switch_targets).get('entity_id') is defined and
-                         (( !input safety_switch_targets ).get('entity_id') | count > 0) }}
+                    value_template: "{{ safety_switch_entities | count > 0 }}"
                 sequence:
                   - service: switch.turn_off
                     target: !input safety_switch_targets
