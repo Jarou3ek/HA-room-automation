@@ -1,12 +1,12 @@
 blueprint:
   name: "Room – Motion lights + auto off + safety"
   description: >
-    v1.0.4 - oprava blikani
+    v1.0.5 - auto ON závisí jen na manual OFF (neřeší stav skupiny)
+    + safety pouze když manual ON: po safety_time bez pohybu zhasne skupinu a vypne manual.
 
-    Když motion ON a manual OFF a skupina je OFF -> rozsvítí vybraná světla (auto list) na daný jas.
-    Když motion OFF a manual OFF -> po zpoždění zhasne auto světla (pokud stále bez pohybu).
-    Pojistka: pokud je bez pohybu déle než safety_time a skupina svítí -> zhasne skupinu a vypne manual.
-    Nezapomeň vytvořit pomocníka pro místnost přepínač.
+    - motion ON + manual OFF -> rozsvítí auto_lights na daný jas
+    - motion OFF po off_delay + manual OFF -> zhasne auto_lights
+    - motion OFF po safety_time + manual ON -> zhasne light_group + vypne manual
   domain: automation
 
   input:
@@ -15,7 +15,6 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
-
 
     manual_boolean:
       name: Input boolean - manuální režim
@@ -52,7 +51,7 @@ blueprint:
         duration:
 
     safety_time:
-      name: Pojistka vypnutí po době bez pohybu
+      name: Pojistka vypnutí po době bez pohybu (jen když manual ON)
       default: "00:30:00"
       selector:
         duration:
@@ -79,14 +78,12 @@ trigger:
 
 action:
   - choose:
+      # AUTO ON: jen manual OFF, stav skupiny se neřeší
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'motion_on' }}"
           - condition: state
             entity_id: !input manual_boolean
-            state: "off"
-          - condition: state
-            entity_id: !input light_group
             state: "off"
         sequence:
           - service: light.turn_on
@@ -94,6 +91,7 @@ action:
             data:
               brightness: !input auto_brightness
 
+      # AUTO OFF: motion OFF po off_delay + manual OFF
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'motion_off' }}"
@@ -107,12 +105,16 @@ action:
           - service: light.turn_off
             target: !input auto_lights
 
+      # SAFETY: jen když manual ON + stále bez pohybu -> zhasni skupinu + vypni manual
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'safety_off' }}"
           - condition: state
-            entity_id: !input light_group
+            entity_id: !input manual_boolean
             state: "on"
+          - condition: state
+            entity_id: !input motion_sensor
+            state: "off"
         sequence:
           - service: light.turn_off
             target:
