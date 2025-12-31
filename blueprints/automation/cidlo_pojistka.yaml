@@ -1,7 +1,7 @@
 blueprint:
   name: "Room – Motion (multi) + Auto OFF + Optional Manual + Optional Safety (lights+switches)"
   description: >
-    v2.0.1
+    v2.0.2
 
     - Motion ON (any sensor) -> turn ON auto targets.
     - Motion OFF (all sensors off for off_delay) -> turn OFF auto targets.
