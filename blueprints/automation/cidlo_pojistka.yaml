@@ -1,20 +1,22 @@
 blueprint:
-  name: "Room – Motion lights + auto off + safety"
+  name: "Room – Motion lights + auto off + optional safety (multi-sensor)"
   description: >
-    v1.0.5 - auto ON závisí jen na manual OFF (neřeší stav skupiny)
-    + safety pouze když manual ON: po safety_time bez pohybu zhasne skupinu a vypne manual.
+    v1.1.0
 
-    - motion ON + manual OFF -> rozsvítí auto_lights na daný jas
-    - motion OFF po off_delay + manual OFF -> zhasne auto_lights
-    - motion OFF po safety_time + manual ON -> zhasne light_group + vypne manual
+    AUTO ON: když jakékoliv motion čidlo ON -> rozsvítí auto_lights (bez kontroly light_group).
+    AUTO OFF: když jsou VŠECHNA motion čidla OFF po off_delay -> zhasne auto_lights.
+    VOLITELNĚ: respektovat manuál (auto on/off jen když manual_boolean = off).
+    VOLITELNĚ: pojistka (safety) – když manual_boolean = on a všechna čidla OFF po safety_time -> zhasne light_group a manual_boolean přepne na off.
   domain: automation
 
   input:
-    motion_sensor:
-      name: Pohybové čidlo (occupancy)
+    motion_sensors:
+      name: Pohybové čidlo/čidla (occupancy)
+      description: Vyber 1 nebo více binary_sensorů. Auto ON při jakémkoliv ON, Auto OFF až když jsou všechny OFF.
       selector:
         entity:
           domain: binary_sensor
+          multiple: true
 
     manual_boolean:
       name: Input boolean - manuální režim
@@ -22,8 +24,16 @@ blueprint:
         entity:
           domain: input_boolean
 
+    respect_manual:
+      name: Respektovat manuální režim pro AUTO on/off
+      description: Pokud ON, auto on/off funguje jen když manual_boolean = OFF.
+      default: true
+      selector:
+        boolean:
+
     light_group:
       name: Skupina světel (hlavní)
+      description: Používá se pro pojistku (safety) – co se má vypnout při dlouhé neaktivitě v manuálu.
       selector:
         entity:
           domain: light
@@ -36,7 +46,7 @@ blueprint:
             domain: light
 
     auto_brightness:
-      name: Jas pro auto světla při pohybu (0-255)
+      name: Jas pro auto světla při pohybu (1-255)
       default: 204
       selector:
         number:
@@ -45,76 +55,100 @@ blueprint:
           mode: slider
 
     off_delay:
-      name: Zpoždění vypnutí po motion OFF
+      name: Zpoždění vypnutí po tom, co jsou všechna čidla OFF
       default: "00:00:30"
       selector:
         duration:
 
+    safety_enabled:
+      name: Pojistka zapnutá
+      default: true
+      selector:
+        boolean:
+
     safety_time:
-      name: Pojistka vypnutí po době bez pohybu (jen když manual ON)
+      name: Pojistka vypnutí po době bez pohybu (platí jen když manuál ON)
       default: "00:30:00"
       selector:
         duration:
 
 mode: restart
 
+variables:
+  motion_entities: !input motion_sensors
+  manual: !input manual_boolean
+  respect_manual: !input respect_manual
+  safety_enabled: !input safety_enabled
+
 trigger:
+  # Jakékoliv čidlo sepnulo -> motion_on
   - id: motion_on
     platform: state
-    entity_id: !input motion_sensor
+    entity_id: !input motion_sensors
     to: "on"
 
-  - id: motion_off
-    platform: state
-    entity_id: !input motion_sensor
-    to: "off"
+  # Všechna čidla jsou OFF po off_delay -> motion_all_off
+  - id: motion_all_off
+    platform: template
+    value_template: >
+      {% set ents = expand(motion_entities) %}
+      {{ ents | count > 0 and (ents | selectattr('state','eq','off') | list | count == ents | count) }}
     for: !input off_delay
 
-  - id: safety_off
-    platform: state
-    entity_id: !input motion_sensor
-    to: "off"
+  # Všechna čidla jsou OFF po safety_time -> safety_all_off
+  - id: safety_all_off
+    platform: template
+    value_template: >
+      {% set ents = expand(motion_entities) %}
+      {{ ents | count > 0 and (ents | selectattr('state','eq','off') | list | count == ents | count) }}
     for: !input safety_time
 
 action:
   - choose:
-      # AUTO ON: jen manual OFF, stav skupiny se neřeší
+      # ==========================
+      # AUTO ON (jakékoliv motion ON)
+      # ==========================
       - conditions:
           - condition: template
             value_template: "{{ trigger.id == 'motion_on' }}"
-          - condition: state
-            entity_id: !input manual_boolean
-            state: "off"
+          # Respekt manuálu (volitelné)
+          - condition: template
+            value_template: >
+              {{ (not respect_manual) or (is_state(manual, 'off')) }}
         sequence:
           - service: light.turn_on
             target: !input auto_lights
             data:
               brightness: !input auto_brightness
 
-      # AUTO OFF: motion OFF po off_delay + manual OFF
+      # ==========================
+      # AUTO OFF (všechna motion OFF po off_delay)
+      # ==========================
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'motion_off' }}"
-          - condition: state
-            entity_id: !input manual_boolean
-            state: "off"
-          - condition: state
-            entity_id: !input motion_sensor
-            state: "off"
+            value_template: "{{ trigger.id == 'motion_all_off' }}"
+          # Respekt manuálu (volitelné)
+          - condition: template
+            value_template: >
+              {{ (not respect_manual) or (is_state(manual, 'off')) }}
         sequence:
           - service: light.turn_off
             target: !input auto_lights
 
-      # SAFETY: jen když manual ON + stále bez pohybu -> zhasni skupinu + vypni manual
+      # ==========================
+      # SAFETY (volitelné) – jen když manuál ON
+      # ==========================
       - conditions:
           - condition: template
-            value_template: "{{ trigger.id == 'safety_off' }}"
+            value_template: "{{ trigger.id == 'safety_all_off' }}"
+          - condition: template
+            value_template: "{{ safety_enabled }}"
           - condition: state
             entity_id: !input manual_boolean
             state: "on"
           - condition: state
-            entity_id: !input motion_sensor
-            state: "off"
+            entity_id: !input light_group
+            state: "on"
         sequence:
           - service: light.turn_off
             target:
