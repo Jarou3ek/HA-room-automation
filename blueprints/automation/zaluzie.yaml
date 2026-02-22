@@ -1,0 +1,256 @@
+blueprint:
+  name: "Žaluzie: 4 polohy (výchozí nahoře) – time-based"
+  description: >
+    Ovládání žaluzií/motoru bez zpětné vazby přes časy.
+    Výchozí poloha je NAHOŘE. Další polohy se skládají:
+      2) DOLŮ = zároveň PROTI SLUNCI
+      3) DEN = PROTI SLUNCI + čas na DEN + pohyb NAHORU (čas)
+      4) NOC = PROTI SLUNCI + čas na DEN + čas na NOC + pohyb NAHORU (čas)
+    Spouští se změnou input_select (Top / Sun / Day / Night).
+
+  domain: automation
+
+  input:
+    cover_entity:
+      name: Cover (žaluzie / motor)
+      selector:
+        entity:
+          domain: cover
+
+    position_selector:
+      name: Input select s polohama (Top/Sun/Day/Night)
+      selector:
+        entity:
+          domain: input_select
+
+    opt_top_value:
+      name: Hodnota pro polohu 1 (NAHOŘE)
+      default: "top"
+      selector:
+        text: {}
+
+    opt_sun_value:
+      name: Hodnota pro polohu 2 (PROTI SLUNCI = DOLŮ)
+      default: "sun"
+      selector:
+        text: {}
+
+    opt_day_value:
+      name: Hodnota pro polohu 3 (DEN)
+      default: "day"
+      selector:
+        text: {}
+
+    opt_night_value:
+      name: Hodnota pro polohu 4 (NOC)
+      default: "night"
+      selector:
+        text: {}
+
+    t_seek_top:
+      name: Čas pro „dohledání“ horní polohy (s)
+      description: "Pojede NAHORU tímto časem, aby se jistě dostalo na doraz."
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: s
+          mode: slider
+
+    t_down_sun:
+      name: Čas jízdy DOLŮ do PROTI SLUNCI (s)
+      default: 13
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: s
+          mode: slider
+
+    t_tilt_day:
+      name: Čas navíc pro přechod PROTI SLUNCI → DEN (s)
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 10
+          unit_of_measurement: s
+          mode: slider
+
+    t_tilt_night:
+      name: Čas navíc pro přechod DEN → NOC (s)
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 10
+          unit_of_measurement: s
+          mode: slider
+
+    t_up_day:
+      name: Čas pohybu NAHORU pro polohu DEN (s)
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: s
+          mode: slider
+
+    t_up_night:
+      name: Čas pohybu NAHORU pro polohu NOC (s)
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: s
+          mode: slider
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input position_selector
+
+variables:
+  cover: !input cover_entity
+  sel: !input position_selector
+
+  opt_top: !input opt_top_value
+  opt_sun: !input opt_sun_value
+  opt_day: !input opt_day_value
+  opt_night: !input opt_night_value
+
+  t_seek_top: !input t_seek_top
+  t_down_sun: !input t_down_sun
+  t_tilt_day: !input t_tilt_day
+  t_tilt_night: !input t_tilt_night
+  t_up_day: !input t_up_day
+  t_up_night: !input t_up_night
+
+action:
+  # 1) Vždy se nejdřív "srovnej" do HORNÍ polohy (výchozí)
+  - service: cover.open_cover
+    target:
+      entity_id: "{{ cover }}"
+  - delay:
+      seconds: "{{ t_seek_top | int }}"
+  - service: cover.stop_cover
+    target:
+      entity_id: "{{ cover }}"
+
+  # 2) Rozhodni podle zvolené polohy
+  - choose:
+      # Poloha 1: NAHOŘE
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == opt_top }}"
+        sequence: []
+
+      # Poloha 2: PROTI SLUNCI (DOLŮ)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == opt_sun }}"
+        sequence:
+          - service: cover.close_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_down_sun | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+      # Poloha 3: DEN (DOLŮ + tilt_day + NAHORU t_up_day)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == opt_day }}"
+        sequence:
+          # DOLŮ do sun
+          - service: cover.close_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_down_sun | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+          # tilt_day (pohyb NAHORU krátce – dle tvé logiky)
+          - service: cover.open_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_tilt_day | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+          # posun NAHORU pro polohu den
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ (t_up_day | int) > 0 }}"
+                sequence:
+                  - service: cover.open_cover
+                    target:
+                      entity_id: "{{ cover }}"
+                  - delay:
+                      seconds: "{{ t_up_day | int }}"
+                  - service: cover.stop_cover
+                    target:
+                      entity_id: "{{ cover }}"
+
+      # Poloha 4: NOC (DOLŮ + tilt_day + tilt_night + NAHORU t_up_night)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.to_state.state == opt_night }}"
+        sequence:
+          # DOLŮ do sun
+          - service: cover.close_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_down_sun | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+          # tilt_day
+          - service: cover.open_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_tilt_day | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+          # tilt_night
+          - service: cover.open_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ t_tilt_night | int }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+          # posun NAHORU pro polohu noc
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ (t_up_night | int) > 0 }}"
+                sequence:
+                  - service: cover.open_cover
+                    target:
+                      entity_id: "{{ cover }}"
+                  - delay:
+                      seconds: "{{ t_up_night | int }}"
+                  - service: cover.stop_cover
+                    target:
+                      entity_id: "{{ cover }}"
+    default: []
