@@ -1,13 +1,20 @@
 blueprint:
-  name: Žaluzie – 4 polohy přes input_number (segmenty)
+  name: Žaluzie – 4 polohy přes input_number (segmenty FIX)
   description: >
     Řízení žaluzií bez zpětné vazby.
     Polohy:
       0 = nahoře
-      1 = proti slunci (dole)
+      1 = proti slunci
       2 = den
       3 = noc
-    Blueprint volí správný směr a projede jen nutné segmenty.
+
+    Směry (dle zadání):
+      0->1 close (dolů)
+      1->2 open  (nahoru)
+      2->3 open  (nahoru)
+      3->2 close (dolů)
+      2->1 close (dolů)
+      1->0 open  (nahoru)
 
   domain: automation
 
@@ -25,7 +32,7 @@ blueprint:
           domain: input_number
 
     t01:
-      name: Čas nahoře → dole (s)
+      name: Čas segmentu 0↔1 (s)
       default: 13.0
       selector:
         number:
@@ -33,9 +40,10 @@ blueprint:
           max: 120
           step: 0.1
           unit_of_measurement: s
+          mode: slider
 
     t12:
-      name: Čas proti slunci → den (s)
+      name: Čas segmentu 1↔2 (s)
       default: 1.0
       selector:
         number:
@@ -43,9 +51,10 @@ blueprint:
           max: 10
           step: 0.1
           unit_of_measurement: s
+          mode: slider
 
     t23:
-      name: Čas den → noc (s)
+      name: Čas segmentu 2↔3 (s)
       default: 1.0
       selector:
         number:
@@ -53,8 +62,10 @@ blueprint:
           max: 10
           step: 0.1
           unit_of_measurement: s
+          mode: slider
 
 mode: restart
+max_exceeded: silent
 
 trigger:
   - platform: state
@@ -62,11 +73,14 @@ trigger:
 
 variables:
   cover: !input cover_entity
-  old: "{{ (trigger.from_state.state if trigger.from_state else '0') | int }}"
-  new: "{{ trigger.to_state.state | int }}"
+  old: "{{ (trigger.from_state.state if trigger.from_state else '0') | int(0) }}"
+  new: "{{ trigger.to_state.state | int(0) }}"
   t01: !input t01
   t12: !input t12
   t23: !input t23
+  d01: "{{ '00:00:%06.3f' | format(t01 | float) }}"
+  d12: "{{ '00:00:%06.3f' | format(t12 | float) }}"
+  d23: "{{ '00:00:%06.3f' | format(t23 | float) }}"
 
 action:
   - condition: template
@@ -74,95 +88,156 @@ action:
 
   - choose:
 
-      # 0 -> 1
+      # --- Sousední přechody (jednoznačné) ---
+
+      # 0 -> 1 (dolů)
       - conditions: "{{ old==0 and new==1 }}"
         sequence:
           - service: cover.close_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t01|float) }}"
+          - delay: "{{ d01 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # 1 -> 0
+      # 1 -> 0 (nahoru)
       - conditions: "{{ old==1 and new==0 }}"
         sequence:
           - service: cover.open_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t01|float) }}"
+          - delay: "{{ d01 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # 1 -> 2
+      # 1 -> 2 (nahoru)
       - conditions: "{{ old==1 and new==2 }}"
         sequence:
           - service: cover.open_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t12|float) }}"
+          - delay: "{{ d12 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # 2 -> 1
+      # 2 -> 1 (dolů)
       - conditions: "{{ old==2 and new==1 }}"
         sequence:
           - service: cover.close_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t12|float) }}"
+          - delay: "{{ d12 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # 2 -> 3
+      # 2 -> 3 (nahoru)
       - conditions: "{{ old==2 and new==3 }}"
         sequence:
           - service: cover.open_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t23|float) }}"
+          - delay: "{{ d23 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # 3 -> 2
+      # 3 -> 2 (dolů)
       - conditions: "{{ old==3 and new==2 }}"
         sequence:
           - service: cover.close_cover
             target: { entity_id: "{{ cover }}" }
-          - delay: "{{ '00:00:%06.3f'|format(t23|float) }}"
+          - delay: "{{ d23 }}"
           - service: cover.stop_cover
             target: { entity_id: "{{ cover }}" }
 
-      # vícekrokové přechody
+      # --- Víc kroků (složené trasy přes sousedy) ---
+
+      # 0 -> 2 = 0->1 (dolů) + 1->2 (nahoru)
       - conditions: "{{ old==0 and new==2 }}"
         sequence:
-          - service: input_number.set_value
-            data: { value: 1 }
-            target: { entity_id: !input position_number }
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d01 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
 
-      - conditions: "{{ old==0 and new==3 }}"
-        sequence:
-          - service: input_number.set_value
-            data: { value: 2 }
-            target: { entity_id: !input position_number }
-
-      - conditions: "{{ old==1 and new==3 }}"
-        sequence:
-          - service: input_number.set_value
-            data: { value: 2 }
-            target: { entity_id: !input position_number }
-
-      - conditions: "{{ old==3 and new==1 }}"
-        sequence:
-          - service: input_number.set_value
-            data: { value: 2 }
-            target: { entity_id: !input position_number }
-
+      # 2 -> 0 = 2->1 (dolů) + 1->0 (nahoru)
       - conditions: "{{ old==2 and new==0 }}"
         sequence:
-          - service: input_number.set_value
-            data: { value: 1 }
-            target: { entity_id: !input position_number }
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d01 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
 
+      # 1 -> 3 = 1->2 (nahoru) + 2->3 (nahoru)
+      - conditions: "{{ old==1 and new==3 }}"
+        sequence:
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d23 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+
+      # 3 -> 1 = 3->2 (dolů) + 2->1 (dolů)
+      - conditions: "{{ old==3 and new==1 }}"
+        sequence:
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d23 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+
+      # 0 -> 3 = 0->1 (dolů) + 1->2 (nahoru) + 2->3 (nahoru)
+      - conditions: "{{ old==0 and new==3 }}"
+        sequence:
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d01 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d23 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+
+      # 3 -> 0 = 3->2 (dolů) + 2->1 (dolů) + 1->0 (nahoru)
       - conditions: "{{ old==3 and new==0 }}"
         sequence:
-          - service: input_number.set_value
-            data: { value: 2 }
-            target: { entity_id: !input position_number }
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d23 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.close_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d12 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
+          - service: cover.open_cover
+            target: { entity_id: "{{ cover }}" }
+          - delay: "{{ d01 }}"
+          - service: cover.stop_cover
+            target: { entity_id: "{{ cover }}" }
 
     default: []
