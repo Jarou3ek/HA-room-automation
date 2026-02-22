@@ -1,0 +1,81 @@
+blueprint:
+  name: "Žaluzie – krokové řízení (input_number)"
+  description: >
+    Ovládání žaluzií bez zpětné vazby.
+    Používá input_number jako uloženou polohu.
+    Podporuje desetiny sekund a počítá rozdíl kroků.
+
+  domain: automation
+
+  input:
+    cover_entity:
+      name: Cover
+      selector:
+        entity:
+          domain: cover
+
+    position_number:
+      name: Input number s polohou
+      selector:
+        entity:
+          domain: input_number
+
+    step_time:
+      name: Délka jednoho kroku (sekundy)
+      default: 1.0
+      selector:
+        number:
+          min: 0.1
+          max: 5
+          step: 0.1
+          unit_of_measurement: s
+          mode: slider
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input position_number
+
+variables:
+  cover: !input cover_entity
+  step: !input step_time
+
+  old: "{{ trigger.from_state.state | float(0) }}"
+  new: "{{ trigger.to_state.state | float(0) }}"
+  diff: "{{ new - old }}"
+  duration: "{{ (diff | abs) * step }}"
+
+action:
+  - choose:
+
+      # pohyb dolů
+      - conditions:
+          - condition: template
+            value_template: "{{ diff > 0 }}"
+        sequence:
+          - service: cover.close_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay: "{{ '00:00:00.' ~ ((duration*10)|int if duration < 1 else '') if duration < 1 else (duration | string) }}"
+          - delay:
+              seconds: "{{ duration }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+      # pohyb nahoru
+      - conditions:
+          - condition: template
+            value_template: "{{ diff < 0 }}"
+        sequence:
+          - service: cover.open_cover
+            target:
+              entity_id: "{{ cover }}"
+          - delay:
+              seconds: "{{ duration }}"
+          - service: cover.stop_cover
+            target:
+              entity_id: "{{ cover }}"
+
+    default: []
